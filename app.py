@@ -103,11 +103,11 @@ st.info("""
 st.divider()
 
 # ==========================================
-# 📊 차트 3: 온도와 강수량에 따른 자치구별 이용건수
+# 📊 차트 3: 자치구별 날씨(기온/강수량) 민감도 분석
 # ==========================================
-st.header("3️⃣ 기상 조건(온도/강수량)에 따른 이용건수 변화")
+st.header("3️⃣ 자치구별 날씨(기온/강수량) 민감도 분석")
 
-# 날씨 데이터(기온, 강수량)는 여러 지점이 있을 수 있으므로 월별로 평균을 내어 조인합니다.
+# 월별로 각 자치구의 총 이용건수를 먼저 집계하고, 날씨 데이터와 결합합니다.
 sql_3 = """
 WITH Weather AS (
     SELECT 
@@ -117,26 +117,54 @@ WITH Weather AS (
     FROM 기온 t
     LEFT JOIN 강수량 p ON t.년월 = p.년월 AND t.지점 = p.지점
     GROUP BY t.년월
+),
+MonthlyUsage AS (
+    SELECT 
+        s.자치구,
+        u.대여일자 AS 년월,
+        SUM(u.이용건수) AS 월총이용건수
+    FROM 이용정보 u
+    JOIN 대여소 s ON u.대여소번호 = s.대여소번호
+    GROUP BY s.자치구, u.대여일자
 )
 SELECT 
-    s.자치구,
-    u.대여일자 AS 년월,
+    m.자치구,
+    m.년월,
     w.평균기온,
     w.강수량,
-    SUM(u.이용건수) AS 총이용건수
-FROM 이용정보 u
-JOIN 대여소 s ON u.대여소번호 = s.대여소번호
-JOIN Weather w ON u.대여일자 = w.년월
-GROUP BY s.자치구, u.대여일자, w.평균기온, w.강수량
+    m.월총이용건수
+FROM MonthlyUsage m
+JOIN Weather w ON m.년월 = w.년월
 """
 df_3 = load_data(sql_3)
 
-# ① 시각화 (산점도: x는 온도, y는 이용건수, 색상은 강수량)
-fig_3 = px.scatter(df_3, x='평균기온', y='총이용건수', color='강수량',
-                   hover_data=['자치구', '년월'],
-                   title="평균기온과 강수량에 따른 이용건수 (색상이 진할수록 비가 많이 옴)",
-                   color_continuous_scale='Teal')
-st.plotly_chart(fig_3, use_container_width=True)
+# Streamlit의 강력한 기능! 위젯을 이용해 비교하고 싶은 자치구를 선택할 수 있게 합니다.
+st.markdown("👇 **비교하고 싶은 자치구를 선택해보세요! (예: 한강이 있는 송파구 vs 도심인 종로구)**")
+district_list = sorted(df_3['자치구'].unique())
+
+# 기본값으로 레저용(송파구)과 출퇴근용(종로구)를 세팅해둡니다.
+selected_districts = st.multiselect("분석할 자치구를 선택하세요", district_list, default=['송파구', '종로구'])
+
+if selected_districts:
+    # 사용자가 선택한 자치구 데이터만 필터링 (Pandas 기능 활용)
+    filtered_df = df_3[df_3['자치구'].isin(selected_districts)]
+    
+    # ① 시각화: x축(온도), y축(이용건수), 색상(자치구 구분), 원크기(강수량)
+    fig_3 = px.scatter(
+        filtered_df, 
+        x='평균기온', 
+        y='월총이용건수', 
+        color='자치구', 
+        size='강수량',
+        hover_data=['년월', '강수량'],
+        title="자치구별 기온 및 강수량에 따른 이용건수 (원의 크기 = 강수량)",
+        size_max=30
+    )
+    # 점들이 겹쳐도 잘 보이도록 테두리 추가
+    fig_3.update_traces(marker=dict(line=dict(width=1, color='DarkSlateGrey')))
+    st.plotly_chart(fig_3, use_container_width=True)
+else:
+    st.warning("비교할 자치구를 하나 이상 선택해주세요.")
 
 # ② 사용한 SQL
 with st.expander("🛠 사용한 SQL 쿼리 보기"):
@@ -144,7 +172,7 @@ with st.expander("🛠 사용한 SQL 쿼리 보기"):
 
 # ③ 인사이트
 st.info("""
-💡 **인사이트**
-* 온도가 너무 춥거나 더운 시기보다는 **따뜻한 봄/가을 기온(15~20도)**일 때 이용건수가 폭발적으로 증가하는 계절성을 보입니다.
-* 같은 온도 조건이더라도 **강수량이 많은 달(진한 색상)**에는 야외 활동의 제약으로 인해 따릉이 이용건수가 급감하는 것을 알 수 있습니다.
+💡 **자치구 기준 인사이트**
+* **레저/운동 중심 자치구 (예: 송파구, 영등포구)**: 한강공원 등이 있어 날씨가 맑고 따뜻할 때 이용량이 산처럼 높게 솟아오릅니다. 반면, 비가 많이 오거나(큰 원) 날씨가 안 좋으면 이용량이 급감하는 **'높은 날씨 민감도'**를 보입니다.
+* **출퇴근/생활 중심 자치구 (예: 종로구, 중구)**: 지하철역에서 회사까지 이동하는 필수 통행(라스트마일)이 많아, 날씨가 춥거나 비가 오더라도 그래프가 바닥을 치지 않고 **상대적으로 덜 변동하며 꾸준히 유지**되는 경향을 보입니다.
 """)
